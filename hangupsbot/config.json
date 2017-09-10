@@ -1,15 +1,11 @@
 {
   "admins": [
   ],
+  "auto_alias_one_to_one": true,
+  "auto_alias_group": false,
   "autoreplies_enabled": true,
   "autoreplies": [
-    [
-      [
-        "hi bot",
-        "hello bot"
-      ],
-      "Hello world!"
-    ]
+    
   ],
   "commands_user": [],
   "commands_enabled": true,
@@ -22,7 +18,7 @@
   },
   "link_to_guide": "https://github.com/hangoutsbot/hangoutsbot/wiki/User-Guide",
   "mentionall":true,
-  "silentmode":false,
+  "silentmode":true,
   "mentionallwhitelist": [],
   "mentionerrors": true,
   "mentionquidproquo": false,

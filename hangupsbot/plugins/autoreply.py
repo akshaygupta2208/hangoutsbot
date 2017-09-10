@@ -1,18 +1,80 @@
-import asyncio, re, logging, json, random
+import asyncio, re, logging, json, random,os
 
 import hangups
 
 import plugins
-
-
+from elasticsearch import Elasticsearch
+import json
+from crawler import  myCrawler
+from _thread import start_new_thread
 logger = logging.getLogger(__name__)
+es = None
 
+conversation_memory = {}
 
 def _initialise(bot):
     plugins.register_handler(_handle_autoreply, type="message")
     plugins.register_handler(_handle_autoreply, type="membership")
     plugins.register_admin_command(["autoreply"])
 
+def get_es_connection():
+    global es
+    if es == None:
+        try:
+            es = Elasticsearch()
+            print ("Connected to elastic server")
+        except Exception as ex:
+            print ("Error: " + str(ex))
+    return es
+    
+
+def get_answer(question):
+
+    es = get_es_connection()
+    autoreply_list_es = []
+    question_list = []
+
+    data = es.search(index='quora',params={'size':3}, body={
+      'query': {
+        'match': {
+          'title': question,
+        }
+      }
+    })
+
+    if data['hits']:
+        for hit in data['hits']['hits']:
+            
+            autoreply_list_es.extend([[[hit['_source']['title']], hit['_source']['body'][0]['answer']]])
+            question_list.append(hit['_source']['title'])
+    return question_list, autoreply_list_es
+
+
+
+
+
+
+def get_elastic_data(text, autoreplies_list):
+    logger.info("going to get elastic data for text : " + text)
+    question_list, autoreply_list_es = get_answer(text)
+    # logger.info("going to get elastic data for text : " + json.dumps(autoreplies_list, sort_keys=True, indent=4))
+    autoreplies_list.extend(autoreply_list_es)
+    return question_list, autoreply_list_es
+
+def get_direct_answer(question):
+    es = get_es_connection()
+    
+    data = es.search(index='quora',params={'size':1}, body={
+      'query': {
+        'match': {
+          'title': question,
+        }
+      }
+    })
+
+    if data['hits']:
+        for hit in data['hits']['hits']:
+            return hit['_source']['body'][0]['answer']
 
 def _handle_autoreply(bot, event, command):
     config_autoreplies = bot.get_config_suboption(event.conv.id_, 'autoreplies_enabled')
@@ -78,19 +140,56 @@ def _handle_autoreply(bot, event, command):
                         overlap = True
                         break
                 if not overlap:
-                    add_to_autoreplies.extend( [[kwds_gbl, sentences_gbl]] )
+                    add_to_autoreplies.extend([[kwds_gbl, sentences_gbl]])
 
             # Extend original list with non-disgarded entries.
-            autoreplies_list.extend( add_to_autoreplies )
-
+            autoreplies_list.extend(add_to_autoreplies)
+    
+    try:    
+        if conversation_memory[event.conv_id]['last_reply_is_a_question']:
+            if event.text.lower() == 'yes':
+                answer = get_direct_answer(conversation_memory[event.conv_id]['last_reply'])
+                yield from send_reply(bot, event, "\n" + answer)
+                conversation_memory[event.conv_id]['last_reply_is_a_question'] = False
+                return
+            elif event.text.lower() == 'no':
+                try:
+                    yield from send_reply(bot, event, "Do you mean \n" + conversation_memory[event.conv_id]['question_list'][conversation_memory[event.conv_id]['no_count'] + 1]+" ?")
+                    conversation_memory[event.conv_id]['last_reply'] = conversation_memory[event.conv_id]['question_list'][conversation_memory[event.conv_id]['no_count'] + 1]
+                    conversation_memory[event.conv_id]['no_count'] += 1 
+                except IndexError:
+                    logger.info("Do nothing")
+                    yield from send_reply(bot, event, "\n😢\n" +"Sorry I was unable to get what you were asking, \nI will let akshay know that you were looking for something. \nHe will revert you once he will be free " )
+                    try:
+                        start_new_thread(myCrawler.search_questions,(conversation_memory[event.conv_id]['query'],))
+                        #myCrawler.search_questions(conversation_memory[event.conv_id]['query'])
+                    except Exception as e:
+                        pass
+                # yield from send_reply(bot, event, "\n" + conversation_memory[event.conv_id]['question_list'][conversation_memory[event.conv_id]['no_count']+1])
+                return
+    except KeyError:
+        logger.info("NOPE")
+    # # get response data from elasticseach and append to auto reply list
+    question_list, autoreplies_list = get_elastic_data(event.text, autoreplies_list)
     if autoreplies_list:
+        i_have_replied = False
         for kwds, sentences in autoreplies_list:
-
+            logger.info("got questions " + str(kwds))
             if isinstance(sentences, list):
                 message = random.choice(sentences)
             else:
                 message = sentences
-
+            if not i_have_replied:
+                yield from send_reply(bot, event,"Do you mean \n "+ kwds[0]+" ?")
+                conversation_memory[event.conv_id] = {}
+                conversation_memory[event.conv_id]['question_list'] = question_list
+                conversation_memory[event.conv_id]['no_count'] = 0
+                conversation_memory[event.conv_id]['last_reply'] = kwds[0]
+                conversation_memory[event.conv_id]['last_reply_is_a_question'] = True
+                conversation_memory[event.conv_id]['pending_reply'] = message
+                conversation_memory[event.conv_id]['query'] = event.text
+                i_have_replied = True
+'''
             if isinstance(kwds, list):
                 for kw in kwds:
                     if _words_in_text(kw, event.text) or kw == "*":
@@ -101,13 +200,13 @@ def _handle_autoreply(bot, event, command):
             elif event_type == kwds:
                 logger.info("matched event: {}".format(kwds))
                 yield from send_reply(bot, event, message)
-
+'''
 
 @asyncio.coroutine
 def send_reply(bot, event, message):
     values = { "event": event,
-               "conv_title": bot.conversations.get_name( event.conv,
-                                                         fallback_string=_("Unidentified Conversation") )}
+               "conv_title": bot.conversations.get_name(event.conv,
+                                                         fallback_string=_("Unidentified Conversation"))}
 
     if "participant_ids" in dir(event.conv_event):
         values["participants"] = [ event.conv.get_user(user_id)
@@ -120,30 +219,30 @@ def send_reply(bot, event, message):
         try:
             values["tldr"] = bot.call_shared("plugin_tldr_shared", bot, args)
         except KeyError:
-            values["tldr"] = "**[TLDR UNAVAILABLE]**" # prevents exception
+            values["tldr"] = "**[TLDR UNAVAILABLE]**"  # prevents exception
             logger.warning("tldr plugin is not loaded")
             pass
 
     envelopes = []
 
     if message.startswith(("ONE_TO_ONE:", "HOST_ONE_TO_ONE")):
-        message = message[message.index(":")+1:].strip()
+        message = message[message.index(":") + 1:].strip()
         target_conv = yield from bot.get_1to1(event.user.id_.chat_id)
         if not target_conv:
-            logger.error("1-to-1 unavailable for {} ({})".format( event.user.full_name,
-                                                                  event.user.id_.chat_id ))
+            logger.error("1-to-1 unavailable for {} ({})".format(event.user.full_name,
+                                                                  event.user.id_.chat_id))
             return False
         envelopes.append((target_conv, message.format(**values)))
 
     elif message.startswith("GUEST_ONE_TO_ONE:"):
-        message = message[message.index(":")+1:].strip()
+        message = message[message.index(":") + 1:].strip()
         for guest in values["participants"]:
             target_conv = yield from bot.get_1to1(guest.id_.chat_id)
             if not target_conv:
-                logger.error("1-to-1 unavailable for {} ({})".format( guest.full_name,
-                                                                      guest.id_.chat_id ))
+                logger.error("1-to-1 unavailable for {} ({})".format(guest.full_name,
+                                                                      guest.id_.chat_id))
                 return False
-            values["guest"] = guest # add the guest as extra info
+            values["guest"] = guest  # add the guest as extra info
             envelopes.append((target_conv, message.format(**values)))
 
     else:
@@ -153,9 +252,9 @@ def send_reply(bot, event, message):
         conv_target, message = send
 
         try:
-            image_id = yield from bot.call_shared( 'image_validate_and_upload_single',
+            image_id = yield from bot.call_shared('image_validate_and_upload_single',
                                                     message,
-                                                    reject_googleusercontent=False )
+                                                    reject_googleusercontent=False)
         except KeyError:
             logger.warning("image plugin not loaded - using in-built fallback")
             image_id = yield from image_validate_and_upload_single(message, bot)
@@ -264,8 +363,8 @@ def image_validate_link(image_uri, reject_googleusercontent=True):
             image_uri = "https://i.imgur.com/" + os.path.basename(image_uri)
 
             """imgur wraps animations in player, force the actual image resource"""
-            image_uri = image_uri.replace(".webm",".gif")
-            image_uri = image_uri.replace(".gifv",".gif")
+            image_uri = image_uri.replace(".webm", ".gif")
+            image_uri = image_uri.replace(".gifv", ".gif")
 
         logger.debug('{} seems to be a valid image link'.format(image_uri))
 
