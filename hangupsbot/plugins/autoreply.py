@@ -159,7 +159,7 @@ def _handle_autoreply(bot, event, command):
                     conversation_memory[event.conv_id]['no_count'] += 1 
                 except IndexError:
                     logger.info("Do nothing")
-                    yield from send_reply(bot, event, "\n😢\n" +"Sorry I was unable to get what you were asking, \nI will let akshay know that you were looking for something. \nHe will revert you once he will be free " )
+                    yield from send_reply(bot, event, "\n😢\n" +"Sorry I was unable to get what you were asking, \nI will let Akshay know that you were looking for something. \nHe will revert you once he will be free " )
                     try:
                         start_new_thread(myCrawler.search_questions,(conversation_memory[event.conv_id]['query'],))
                         #myCrawler.search_questions(conversation_memory[event.conv_id]['query'])
