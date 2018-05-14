@@ -9,7 +9,7 @@ jsonrpclib-pelix
 
 python_dateutil                                 # sinks: gitlab
 pushbullet.py                                   # plugins: mentions
-goslate                                         # plugins: simplytranslate, syncrooms_autotranslate
+#goslate                                         # plugins: simplytranslate, syncrooms_autotranslate
 textblob                                        # plugins: simplytranslate, syncrooms_autotranslate
 wikipedia                                       # plugins: simplewikipedia
 wolframalpha                                    # plugins: wolframalpha
@@ -23,3 +23,8 @@ TwitterAPI                                      # plugins: twitter
 google-api-python-client                        # plugins: spotify
 spotipy                                         # plugins: spotify
 soundcloud                                      # plugins: spotify
+
+###Elasticsearch crawler Dependency
+elasticsearch==5.5.2
+elasticsearch-dsl==5.3.0
+lxml
